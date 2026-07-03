@@ -51,6 +51,9 @@ public:
 	uint32_t writePosition = 0;
 	uint32_t stringStart = 0;
 	uint32_t lastStringEnd = 0;
+	// set when napi_create_string_* fails (e.g. V8 allocation failure); the scan stops and only
+	// successfully-created entries are returned so the caller can re-extract from where we left off
+	bool failed = false;
 
 	napi_status createString(napi_env env, const char* data, size_t length, bool isUtf8, napi_value* value) {
 		if (testFailMarker && length >= testFailMarkerLength && memcmp(data, testFailMarker, testFailMarkerLength) == 0) {
@@ -77,13 +80,19 @@ public:
 			// non-latin character
 			if (lastStringEnd) {
 				napi_value value;
-				createString(env, (const char*) source + stringStart, lastStringEnd - stringStart, false, &value);
+				if (createString(env, (const char*) source + stringStart, lastStringEnd - stringStart, false, &value) != napi_ok) {
+					failed = true;
+					return;
+				}
 				target[writePosition++] = value;
 				lastStringEnd = 0;
 			}
 			// use standard utf-8 conversion
 			napi_value value;
-			createString(env, (const char*) source + start, (size_t) length, true, &value);
+			if (createString(env, (const char*) source + start, (size_t) length, true, &value) != napi_ok) {
+				failed = true;
+				return;
+			}
 			target[writePosition++] = value;
 			position = end;
 			return;
@@ -92,7 +101,10 @@ public:
 		if (lastStringEnd) {
 			if (start - lastStringEnd > 40 || end - stringStart > 6000) {
 				napi_value value;
-				createString(env, (const char*) source + stringStart, lastStringEnd - stringStart, false, &value);
+				if (createString(env, (const char*) source + stringStart, lastStringEnd - stringStart, false, &value) != napi_ok) {
+					failed = true;
+					return;
+				}
 				target[writePosition++] = value;
 				stringStart = start;
 			}
@@ -106,9 +118,10 @@ public:
 		napi_value target[MAX_TARGET_SIZE + 1]; // leave one for the queued string
 		writePosition = 0;
 		lastStringEnd = 0;
+		failed = false;
 		position = startingPosition;
 		source = inputSource;
-		while (position < size) {
+		while (position < size && !failed) {
 			uint8_t token = source[position++];
 			if (token < 0xa0) {
 				// all one byte tokens
@@ -169,15 +182,26 @@ public:
 			}
 		}
 
-		if (lastStringEnd) {
+		if (lastStringEnd && !failed) {
 			napi_value value;
-			createString(env, (const char*) source + stringStart, lastStringEnd - stringStart, false, &value);
-			if (writePosition == 0) {
-				return value;
+			if (createString(env, (const char*) source + stringStart, lastStringEnd - stringStart, false, &value) != napi_ok) {
+				failed = true;
+			} else {
+				if (writePosition == 0) {
+					return value;
+				}
+				target[writePosition++] = value;
 			}
-			target[writePosition++] = value;
 		} else if (writePosition == 1) {
 			return target[0];
+		}
+		if (failed && writePosition == 0) {
+			// nothing was successfully extracted: fail loudly rather than return an empty result
+			// that could be misinterpreted (a transient allocation failure becomes a retryable error)
+			napi_throw_error(env, NULL, "msgpackr-extract: string creation failed (allocation failure?)");
+			napi_value returnValue;
+			napi_get_undefined(env, &returnValue);
+			return returnValue;
 		}
 		napi_value array;
 		#if ENABLE_V8_API

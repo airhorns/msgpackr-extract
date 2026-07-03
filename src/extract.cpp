@@ -6,6 +6,8 @@ times as necessary to get more strings. This must be partially capable of parsin
 find the string tokens and determine their position and length. All strings are decoded as UTF-8.
 */
 #include <node_api.h>
+#include <cstdlib>
+#include <cstring>
 #if ENABLE_V8_API
 #include <v8.h>
 #endif
@@ -33,6 +35,13 @@ napi_value unexpectedEnd(napi_env env) {
 	return returnValue;
 }
 
+// Test hook: when MSGPACKR_EXTRACT_TEST_FAIL_MARKER is set, any string whose content starts
+// with the marker simulates a failed napi_create_string_* call (returns a non-ok status without
+// writing the out value) — the same observable behavior as a V8 string-allocation failure.
+// Read once at module init; zero overhead when unset.
+static const char* testFailMarker = nullptr;
+static size_t testFailMarkerLength = 0;
+
 class Extractor {
 public:
 	// napi_ref targetArray; // could consider reenabling this optimization for napi
@@ -42,6 +51,15 @@ public:
 	uint32_t writePosition = 0;
 	uint32_t stringStart = 0;
 	uint32_t lastStringEnd = 0;
+
+	napi_status createString(napi_env env, const char* data, size_t length, bool isUtf8, napi_value* value) {
+		if (testFailMarker && length >= testFailMarkerLength && memcmp(data, testFailMarker, testFailMarkerLength) == 0) {
+			// simulate napi_create_string_* failing without writing *value
+			return napi_generic_failure;
+		}
+		return isUtf8 ? napi_create_string_utf8(env, data, length, value)
+					  : napi_create_string_latin1(env, data, length, value);
+	}
 
 	void readString(napi_env env, uint32_t length, bool allowStringBlocks, napi_value* target) {
 		uint32_t start = position;
@@ -59,13 +77,13 @@ public:
 			// non-latin character
 			if (lastStringEnd) {
 				napi_value value;
-				napi_create_string_latin1(env, (const char*) source + stringStart, lastStringEnd - stringStart, &value);
+				createString(env, (const char*) source + stringStart, lastStringEnd - stringStart, false, &value);
 				target[writePosition++] = value;
 				lastStringEnd = 0;
 			}
 			// use standard utf-8 conversion
 			napi_value value;
-			napi_create_string_utf8(env, (const char*) source + start, (int) length, &value);
+			createString(env, (const char*) source + start, (size_t) length, true, &value);
 			target[writePosition++] = value;
 			position = end;
 			return;
@@ -74,7 +92,7 @@ public:
 		if (lastStringEnd) {
 			if (start - lastStringEnd > 40 || end - stringStart > 6000) {
 				napi_value value;
-				napi_create_string_latin1(env, (const char*) source + stringStart, lastStringEnd - stringStart, &value);
+				createString(env, (const char*) source + stringStart, lastStringEnd - stringStart, false, &value);
 				target[writePosition++] = value;
 				stringStart = start;
 			}
@@ -153,7 +171,7 @@ public:
 
 		if (lastStringEnd) {
 			napi_value value;
-			napi_create_string_latin1(env, (const char*) source + stringStart, lastStringEnd - stringStart, &value);
+			createString(env, (const char*) source + stringStart, lastStringEnd - stringStart, false, &value);
 			if (writePosition == 0) {
 				return value;
 			}
@@ -273,6 +291,11 @@ napi_value extractStrings(napi_env env, napi_callback_info info) {
 NAPI_MODULE_INIT() {
 	extractor = new Extractor(); // create our thread-local extractor
 	setupTokenTable();
+	const char* failMarker = getenv("MSGPACKR_EXTRACT_TEST_FAIL_MARKER");
+	if (failMarker && failMarker[0]) {
+		testFailMarker = strdup(failMarker);
+		testFailMarkerLength = strlen(testFailMarker);
+	}
 	EXPORT_NAPI_FUNCTION("extractStrings", extractStrings);
 	return exports;
 }

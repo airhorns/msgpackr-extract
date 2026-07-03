@@ -67,4 +67,5 @@ tests/samples
 .vs
 
 .DS_Store
-build
+buildnode_modules/
+build/

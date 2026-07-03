@@ -1,7 +1,7 @@
 {
   "name": "msgpackr-extract",
   "author": "Kris Zyp",
-  "version": "3.0.4",
+  "version": "3.0.4-gadget.1",
   "description": "Node addon for string extraction for msgpackr",
   "license": "MIT",
   "repository": {
@@ -29,18 +29,11 @@
     "index.js",
     "/src",
     "/*.gyp",
-    "/bin"
+    "/bin",
+    "/prebuilds"
   ],
   "bin": {
     "download-msgpackr-prebuilds": "./bin/download-prebuilds.js"
-  },
-  "optionalDependencies": {
-    "@msgpackr-extract/msgpackr-extract-darwin-arm64": "3.0.4",
-    "@msgpackr-extract/msgpackr-extract-darwin-x64": "3.0.4",
-    "@msgpackr-extract/msgpackr-extract-linux-arm": "3.0.4",
-    "@msgpackr-extract/msgpackr-extract-linux-arm64": "3.0.4",
-    "@msgpackr-extract/msgpackr-extract-linux-x64": "3.0.4",
-    "@msgpackr-extract/msgpackr-extract-win32-x64": "3.0.4"
   },
   "devDependencies": {
     "prebuildify-platform-packages": "5.0.4",
